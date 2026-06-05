@@ -13,7 +13,7 @@
     "dotenv": "latest",
     "express": "latest",
     "pino": "latest",
-    "qrcode-terminal": "latest"
     "qrcode": "latest",
+    "qrcode-terminal": "latest"
   }
 }
