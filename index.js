@@ -25,6 +25,7 @@ app.listen(PORT, () => {
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROUP_NAME = process.env.GROUP_NAME || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+const AIKA_PHONE_NUMBER = process.env.AIKA_PHONE_NUMBER || "";
 
 if (!GEMINI_API_KEY) {
   console.error("Ошибка: не найден GEMINI_API_KEY");
@@ -201,6 +202,19 @@ async function startBot() {
     logger: P({ level: "silent" }),
     browser: ["Aika AI", "Chrome", "1.0.0"]
   });
+    if (!sock.authState.creds.registered && AIKA_PHONE_NUMBER) {
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(AIKA_PHONE_NUMBER);
+        console.log("======================================");
+        console.log("КОД ДЛЯ ВХОДА WHATSAPP:");
+        console.log(code);
+        console.log("======================================");
+      } catch (error) {
+        console.error("Ошибка получения pairing code:", error);
+      }
+    }, 3000);
+  }
 
   sock.ev.on("creds.update", saveCreds);
 
