@@ -1,0 +1,18 @@
+{
+  "name": "aika-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "AI девушка-ассистент для WhatsApp группы",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "latest",
+    "@whiskeysockets/baileys": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "pino": "latest",
+    "qrcode-terminal": "latest"
+  }
+}
