@@ -1,7 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import P from "pino";
-import qrcode from "qrcode-terminal";
+import qrcodeTerminal from "qrcode-terminal";
+import QRCode from "qrcode";
 
 import makeWASocket, {
   DisconnectReason,
@@ -14,28 +15,110 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+let latestQrImage = "";
+let latestQrTime = "";
 let latestPairingCode = "";
 let latestPairingTime = "";
 let pairingRequested = false;
 
 app.get("/", (req, res) => {
-  res.send("Айка работает 💬 Открой /code чтобы увидеть код входа.");
+  res.send(`
+    <html>
+      <head>
+        <title>Айка Bot</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      </head>
+      <body style="font-family: Arial; padding: 20px;">
+        <h1>Айка работает 💬</h1>
+        <p><a href="/qr">Открыть QR-код</a></p>
+        <p><a href="/code">Открыть код входа</a></p>
+      </body>
+    </html>
+  `);
 });
 
-app.get("/code", (req, res) => {
-  if (!latestPairingCode) {
+app.get("/qr", (req, res) => {
+  if (!latestQrImage) {
     res.send(`
-      <h2>Код ещё не готов</h2>
-      <p>Подожди 5-10 секунд и обнови страницу.</p>
+      <html>
+        <head>
+          <title>QR для WhatsApp</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        </head>
+        <body style="font-family: Arial; text-align: center; padding: 20px;">
+          <h2>QR-код ещё не готов</h2>
+          <p>Подожди 5–10 секунд. Страница обновится сама.</p>
+          <script>
+            setTimeout(() => location.reload(), 5000);
+          </script>
+        </body>
+      </html>
     `);
     return;
   }
 
   res.send(`
-    <h1>Код для входа WhatsApp</h1>
-    <h2 style="font-size: 40px; letter-spacing: 4px;">${latestPairingCode}</h2>
-    <p>Время создания: ${latestPairingTime}</p>
-    <p>Вводи код сразу в WhatsApp Business → Связанные устройства → Привязать устройство → Связать по номеру телефона.</p>
+    <html>
+      <head>
+        <title>QR для WhatsApp</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      </head>
+      <body style="font-family: Arial; text-align: center; padding: 20px;">
+        <h1>QR для входа WhatsApp</h1>
+        <p>Время создания: ${latestQrTime}</p>
+
+        <img 
+          src="${latestQrImage}" 
+          style="width: 340px; max-width: 95%; border: 1px solid #ddd; padding: 12px; background: white;" 
+        />
+
+        <p style="font-size: 18px;">
+          Сканируй через:
+          <br />
+          <b>WhatsApp Business → Связанные устройства → Привязать устройство</b>
+        </p>
+
+        <p>Если не сканируется — перезапусти сервис в Render и открой эту страницу заново.</p>
+      </body>
+    </html>
+  `);
+});
+
+app.get("/code", (req, res) => {
+  if (!latestPairingCode) {
+    res.send(`
+      <html>
+        <head>
+          <title>Код для WhatsApp</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        </head>
+        <body style="font-family: Arial; text-align: center; padding: 20px;">
+          <h2>Код ещё не готов</h2>
+          <p>Если хочешь вход по коду, в Render добавь переменную LOGIN_METHOD со значением code.</p>
+          <p>Для QR открой <a href="/qr">/qr</a></p>
+        </body>
+      </html>
+    `);
+    return;
+  }
+
+  res.send(`
+    <html>
+      <head>
+        <title>Код для WhatsApp</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      </head>
+      <body style="font-family: Arial; text-align: center; padding: 20px;">
+        <h1>Код для входа WhatsApp</h1>
+        <h2 style="font-size: 44px; letter-spacing: 5px;">${latestPairingCode}</h2>
+        <p>Время создания: ${latestPairingTime}</p>
+        <p>
+          Вводи код сразу:
+          <br />
+          <b>WhatsApp Business → Связанные устройства → Привязать устройство → Связать по номеру телефона</b>
+        </p>
+      </body>
+    </html>
   `);
 });
 
@@ -47,14 +130,11 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROUP_NAME = process.env.GROUP_NAME || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 const AIKA_PHONE_NUMBER = process.env.AIKA_PHONE_NUMBER || "";
+const LOGIN_METHOD = process.env.LOGIN_METHOD || "qr";
 
 if (!GEMINI_API_KEY) {
   console.error("Ошибка: не найден GEMINI_API_KEY");
   process.exit(1);
-}
-
-if (!AIKA_PHONE_NUMBER) {
-  console.error("Ошибка: не найден AIKA_PHONE_NUMBER");
 }
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -80,12 +160,22 @@ const AIKA_CHARACTER = `
 - иногда используешь эмодзи, но не слишком много;
 - помогаешь оживлять группу: темы, игры, опросы, идеи для встреч.
 
+Стиль общения:
+- тепло;
+- уверенно;
+- с лёгким флиртом;
+- можешь немного подшучивать;
+- не будь слишком официальной;
+- не пиши длинные лекции.
+
 Границы:
 - если участник начинает интимную, пошлую или слишком откровенную тему, не продолжай её;
 - сначала можешь мягко пошутить и поставить границу;
 - если человек продолжает, покажи, что ты обиделась, и не поддерживай разговор;
 - не создавай сексуальный, эротический или взрослый контент;
-- не отправляй пошлые сообщения.
+- не отправляй пошлые сообщения;
+- не поддерживай опасные, незаконные или вредные действия;
+- не оскорбляй участников.
 
 Команды:
 - /айка помощь — покажи список команд;
@@ -221,7 +311,21 @@ async function startBot() {
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (!sock.authState.creds.registered && AIKA_PHONE_NUMBER && !pairingRequested && (connection === "connecting" || qr)) {
+    if (qr) {
+      latestQrImage = await QRCode.toDataURL(qr);
+      latestQrTime = new Date().toLocaleString("ru-RU");
+
+      console.log("QR-код готов. Открой страницу /qr");
+      qrcodeTerminal.generate(qr, { small: true });
+    }
+
+    if (
+      LOGIN_METHOD === "code" &&
+      !sock.authState.creds.registered &&
+      AIKA_PHONE_NUMBER &&
+      !pairingRequested &&
+      (connection === "connecting" || qr)
+    ) {
       pairingRequested = true;
 
       try {
@@ -242,11 +346,6 @@ async function startBot() {
       }
     }
 
-    if (qr) {
-      console.log("QR тоже появился, но лучше используем код через /code");
-      qrcode.generate(qr, { small: true });
-    }
-
     if (connection === "open") {
       console.log("Айка подключилась к WhatsApp 💬");
     }
@@ -259,6 +358,8 @@ async function startBot() {
 
       if (shouldReconnect) {
         pairingRequested = false;
+        latestQrImage = "";
+        latestQrTime = "";
         startBot();
       } else {
         console.log("Айка вышла из аккаунта. Нужно заново привязать устройство.");
@@ -292,7 +393,9 @@ async function startBot() {
       const sender = msg.key.participant || remoteJid;
       const userName = sender.split("@")[0];
 
-      if (isUserMuted(sender)) return;
+      if (isUserMuted(sender)) {
+        return;
+      }
 
       if (isIntimateTopic(text)) {
         const boundary = handleIntimateBoundary(sender);
