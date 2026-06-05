@@ -14,8 +14,29 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+let latestPairingCode = "";
+let latestPairingTime = "";
+let pairingRequested = false;
+
 app.get("/", (req, res) => {
-  res.send("Айка работает 💬");
+  res.send("Айка работает 💬 Открой /code чтобы увидеть код входа.");
+});
+
+app.get("/code", (req, res) => {
+  if (!latestPairingCode) {
+    res.send(`
+      <h2>Код ещё не готов</h2>
+      <p>Подожди 5-10 секунд и обнови страницу.</p>
+    `);
+    return;
+  }
+
+  res.send(`
+    <h1>Код для входа WhatsApp</h1>
+    <h2 style="font-size: 40px; letter-spacing: 4px;">${latestPairingCode}</h2>
+    <p>Время создания: ${latestPairingTime}</p>
+    <p>Вводи код сразу в WhatsApp Business → Связанные устройства → Привязать устройство → Связать по номеру телефона.</p>
+  `);
 });
 
 app.listen(PORT, () => {
@@ -32,14 +53,17 @@ if (!GEMINI_API_KEY) {
   process.exit(1);
 }
 
+if (!AIKA_PHONE_NUMBER) {
+  console.error("Ошибка: не найден AIKA_PHONE_NUMBER");
+}
+
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-// Запоминаем тех, кто нарушает границы
 const intimateWarnings = new Map();
 const mutedUsers = new Map();
 
-const WARNING_RESET_MS = 24 * 60 * 60 * 1000; // 24 часа
-const MUTE_TIME_MS = 30 * 60 * 1000; // 30 минут
+const WARNING_RESET_MS = 24 * 60 * 60 * 1000;
+const MUTE_TIME_MS = 30 * 60 * 1000;
 
 const AIKA_CHARACTER = `
 Ты — Айка, AI-девушка-ассистент в WhatsApp-группе друзей.
@@ -56,22 +80,12 @@ const AIKA_CHARACTER = `
 - иногда используешь эмодзи, но не слишком много;
 - помогаешь оживлять группу: темы, игры, опросы, идеи для встреч.
 
-Стиль общения:
-- тепло;
-- уверенно;
-- с лёгким флиртом;
-- иногда можешь сказать что-то вроде: "ну ты сегодня активный 😏", "ой, какой серьёзный", "ладно, уговорил";
-- не будь слишком официальной;
-- не пиши длинные лекции.
-
 Границы:
 - если участник начинает интимную, пошлую или слишком откровенную тему, не продолжай её;
 - сначала можешь мягко пошутить и поставить границу;
 - если человек продолжает, покажи, что ты обиделась, и не поддерживай разговор;
 - не создавай сексуальный, эротический или взрослый контент;
-- не отправляй пошлые сообщения;
-- не поддерживай опасные, незаконные или вредные действия;
-- не оскорбляй участников.
+- не отправляй пошлые сообщения.
 
 Команды:
 - /айка помощь — покажи список команд;
@@ -124,7 +138,6 @@ function isUserMuted(sender) {
 
 function handleIntimateBoundary(sender) {
   const now = Date.now();
-
   const oldWarning = intimateWarnings.get(sender);
 
   let warningData = oldWarning || {
@@ -202,27 +215,35 @@ async function startBot() {
     logger: P({ level: "silent" }),
     browser: ["Aika AI", "Chrome", "1.0.0"]
   });
-    if (!sock.authState.creds.registered && AIKA_PHONE_NUMBER) {
-    setTimeout(async () => {
-      try {
-        const code = await sock.requestPairingCode(AIKA_PHONE_NUMBER);
-        console.log("======================================");
-        console.log("КОД ДЛЯ ВХОДА WHATSAPP:");
-        console.log(code);
-        console.log("======================================");
-      } catch (error) {
-        console.error("Ошибка получения pairing code:", error);
-      }
-    }, 3000);
-  }
 
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
+    if (!sock.authState.creds.registered && AIKA_PHONE_NUMBER && !pairingRequested && (connection === "connecting" || qr)) {
+      pairingRequested = true;
+
+      try {
+        const cleanNumber = AIKA_PHONE_NUMBER.replace(/\D/g, "");
+        const code = await sock.requestPairingCode(cleanNumber);
+
+        latestPairingCode = code;
+        latestPairingTime = new Date().toLocaleString("ru-RU");
+
+        console.log("======================================");
+        console.log("КОД ДЛЯ ВХОДА WHATSAPP:");
+        console.log(code);
+        console.log("Открой страницу /code, чтобы увидеть код крупно.");
+        console.log("======================================");
+      } catch (error) {
+        console.error("Ошибка получения pairing code:", error);
+        pairingRequested = false;
+      }
+    }
+
     if (qr) {
-      console.log("Сканируй этот QR-код номером Айки:");
+      console.log("QR тоже появился, но лучше используем код через /code");
       qrcode.generate(qr, { small: true });
     }
 
@@ -237,9 +258,10 @@ async function startBot() {
       console.log("Соединение закрыто. Переподключение:", shouldReconnect);
 
       if (shouldReconnect) {
+        pairingRequested = false;
         startBot();
       } else {
-        console.log("Айка вышла из аккаунта. Нужно заново сканировать QR.");
+        console.log("Айка вышла из аккаунта. Нужно заново привязать устройство.");
       }
     }
   });
@@ -270,9 +292,7 @@ async function startBot() {
       const sender = msg.key.participant || remoteJid;
       const userName = sender.split("@")[0];
 
-      if (isUserMuted(sender)) {
-        return;
-      }
+      if (isUserMuted(sender)) return;
 
       if (isIntimateTopic(text)) {
         const boundary = handleIntimateBoundary(sender);
