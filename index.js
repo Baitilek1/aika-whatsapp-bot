@@ -10,7 +10,7 @@ import makeWASocket, {
   fetchLatestBaileysVersion
 } from "@whiskeysockets/baileys";
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -94,7 +94,7 @@ app.get("/code", (req, res) => {
         </head>
         <body style="font-family: Arial; text-align: center; padding: 20px;">
           <h2>Код ещё не готов</h2>
-          <p>Если хочешь вход по коду, в Render добавь переменную LOGIN_METHOD со значением code.</p>
+          <p>Для входа по коду в Render надо поставить LOGIN_METHOD = code.</p>
           <p>Для QR открой <a href="/qr">/qr</a></p>
         </body>
       </html>
@@ -128,16 +128,23 @@ app.listen(PORT, () => {
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROUP_NAME = process.env.GROUP_NAME || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+let GEMINI_MODEL = (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
 const AIKA_PHONE_NUMBER = process.env.AIKA_PHONE_NUMBER || "";
 const LOGIN_METHOD = process.env.LOGIN_METHOD || "qr";
+
+// Если в Render стоит старая модель 1.5, автоматически меняем на новую
+if (GEMINI_MODEL.includes("1.5")) {
+  GEMINI_MODEL = "gemini-2.5-flash";
+}
 
 if (!GEMINI_API_KEY) {
   console.error("Ошибка: не найден GEMINI_API_KEY");
   process.exit(1);
 }
 
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+const ai = new GoogleGenAI({
+  apiKey: GEMINI_API_KEY
+});
 
 const intimateWarnings = new Map();
 const mutedUsers = new Map();
@@ -262,11 +269,6 @@ function handleIntimateBoundary(sender) {
 
 async function askAika(userText, userName) {
   try {
-    const model = genAI.getGenerativeModel({
-      model: GEMINI_MODEL,
-      systemInstruction: AIKA_CHARACTER
-    });
-
     const prompt = `
 Участник группы "${userName}" написал:
 "${userText}"
@@ -274,12 +276,25 @@ async function askAika(userText, userName) {
 Ответь как Айка.
 `;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        systemInstruction: AIKA_CHARACTER,
+        temperature: 0.8,
+        maxOutputTokens: 250
+      }
+    });
+
+    const text = response.text;
 
     return text || "Я задумалась 😅 Напиши ещё раз.";
   } catch (error) {
-    console.error("Gemini error:", error);
+    console.error("Gemini error name:", error?.name);
+    console.error("Gemini error message:", error?.message);
+    console.error("Gemini error status:", error?.status);
+    console.error("Full Gemini error:", error);
+
     return "Ой, у меня сейчас небольшой сбой 😅 Попробуйте ещё раз.";
   }
 }
@@ -387,6 +402,7 @@ async function startBot() {
       const groupInfo = await sock.groupMetadata(remoteJid);
 
       if (GROUP_NAME && groupInfo.subject !== GROUP_NAME) {
+        console.log(`Сообщение из другой группы: ${groupInfo.subject}`);
         return;
       }
 
