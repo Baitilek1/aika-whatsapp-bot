@@ -8,7 +8,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@google/genai": "latest",
+    "@google/generative-ai": "latest",
     "@whiskeysockets/baileys": "latest",
     "dotenv": "latest",
     "express": "latest",
